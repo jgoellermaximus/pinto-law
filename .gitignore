@@ -16,3 +16,8 @@ next-env.d.ts
 .DS_Store
 .vercel
 coverage
+
+# Pinto Law additions
+.env.local
+drizzle/
+_reference/
