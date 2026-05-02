@@ -20,7 +20,7 @@ function client(override?: string | null): OpenAI {
     baseURL: "https://openrouter.ai/api/v1",
     defaultHeaders: {
       "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
-      "X-Title": "Pinto Law Group — Legal Brain",
+      "X-Title": "Pinto Law Group - Legal Brain",
     },
   });
 }
