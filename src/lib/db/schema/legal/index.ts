@@ -35,3 +35,7 @@ export {
   tabularReviewChats,
   tabularReviewChatMessages,
 } from "./tabular-reviews";
+
+export {
+  dealIntakes,
+} from "./deal-intakes";

@@ -15,7 +15,7 @@ import {
   LogOut,
   ChevronDown,
   Check,
-  Scale,
+  FileText,
 } from "lucide-react";
 import Link from "next/link";
 import ReactMarkdown from "react-markdown";
@@ -56,6 +56,7 @@ const DEFAULT_MODEL = "anthropic/claude-sonnet-4-6";
 
 const NAV_ITEMS = [
   { href: "/chat", label: "Assistant", icon: MessageSquare },
+  { href: "/deals", label: "Deals", icon: FileText },
   { href: "/projects", label: "Projects", icon: FolderOpen },
   { href: "/tabular-reviews", label: "Tabular Review", icon: Table2 },
   { href: "/workflows", label: "Workflows", icon: Library },
