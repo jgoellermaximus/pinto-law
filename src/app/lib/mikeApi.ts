@@ -34,8 +34,7 @@ interface ServerChatDetailOut {
     messages: ServerMessage[];
 }
 
-const API_BASE =
-    process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
+const API_BASE = "";
 
 async function getAuthHeader(): Promise<Record<string, string>> {
     const {
@@ -78,7 +77,8 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
 // ---------------------------------------------------------------------------
 
 export async function listProjects(): Promise<MikeProject[]> {
-    return apiRequest<MikeProject[]>("/projects");
+    // TODO: Replace with trpc.projects.list.useQuery()
+    return [];
 }
 
 export async function createProject(
@@ -362,11 +362,13 @@ export async function createChat(payload?: {
 }
 
 export async function listChats(): Promise<MikeChat[]> {
-    return apiRequest<MikeChat[]>("/chat");
+    // TODO: Replace with trpc.chats.list.useQuery()
+    return [];
 }
 
 export async function listProjectChats(projectId: string): Promise<MikeChat[]> {
-    return apiRequest<MikeChat[]>(`/projects/${projectId}/chats`);
+    // TODO: Replace with trpc.chats.list.useQuery({ projectId })
+    return [];
 }
 
 export async function getChat(chatId: string): Promise<MikeChatDetailOut> {
@@ -434,7 +436,7 @@ export async function streamChat(payload: {
 }): Promise<Response> {
     const { signal, ...body } = payload;
     const authHeaders = await getAuthHeader();
-    return fetch(`${API_BASE}/chat`, {
+    return fetch(`/api/chat`, {
         method: "POST",
         headers: {
             "Content-Type": "application/json",

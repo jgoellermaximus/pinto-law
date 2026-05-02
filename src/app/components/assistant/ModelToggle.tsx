@@ -19,13 +19,13 @@ export interface ModelOption {
 }
 
 export const MODELS: ModelOption[] = [
-    { id: "claude-opus-4-7", label: "Claude Opus 4.7", group: "Anthropic" },
-    { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", group: "Anthropic" },
-    { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro", group: "Google" },
-    { id: "gemini-3-flash-preview", label: "Gemini 3 Flash", group: "Google" },
+    { id: "anthropic/claude-sonnet-4-6", label: "Claude Sonnet 4.6", group: "Anthropic" },
+    { id: "anthropic/claude-haiku-4-5", label: "Claude Haiku 4.5", group: "Anthropic" },
+    { id: "google/gemini-2.5-flash-preview", label: "Gemini 2.5 Flash", group: "Google" },
+    { id: "qwen/qwen3-235b-a22b", label: "Qwen 3 235B", group: "Google" },
 ];
 
-export const DEFAULT_MODEL_ID = "gemini-3-flash-preview";
+export const DEFAULT_MODEL_ID = "anthropic/claude-sonnet-4-6";
 
 export const ALLOWED_MODEL_IDS = new Set(MODELS.map((m) => m.id));
 
