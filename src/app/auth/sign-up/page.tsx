@@ -58,7 +58,7 @@ export default function SignUpPage() {
     <div className="space-y-6">
       <div className="text-center space-y-1">
         <h1 className="text-2xl font-semibold tracking-tight">
-          Legal Brain
+          Pinto Law Legal OS
         </h1>
         <p className="text-sm text-muted-foreground">
           Create your account

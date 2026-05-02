@@ -20,6 +20,7 @@ import {
 import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { PintoLogo } from "@/components/pinto-logo";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -265,10 +266,10 @@ export default function ChatPage() {
       >
         <div className="flex h-full w-64 flex-col">
           {/* Logo */}
-          <div className="flex items-center gap-2.5 px-4 h-14 border-b border-gray-100">
-            <Scale className="h-5 w-5 text-gray-800" />
-            <span className="font-semibold text-[15px] text-gray-800 tracking-tight">
-              Legal Brain
+          <div className="flex items-center gap-3 px-4 h-16 border-b border-gray-100">
+            <PintoLogo size={36} />
+            <span className="text-xs font-semibold text-gray-400 uppercase tracking-widest">
+              Legal OS
             </span>
           </div>
 
@@ -421,7 +422,7 @@ export default function ChatPage() {
           {messages.length === 0 && !streamingContent ? (
             /* Empty state */
             <div className="flex flex-col items-center justify-center h-full px-4">
-              <Scale className="h-10 w-10 text-gray-300 mb-4" />
+              <PintoLogo size={120} className="object-contain mb-6" />
               <h1 className="text-2xl font-semibold text-gray-800 mb-1">
                 Hi, {user?.name?.split(" ")[0] ?? "there"}
               </h1>
