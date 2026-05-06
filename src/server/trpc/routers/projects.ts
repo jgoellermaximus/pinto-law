@@ -30,7 +30,7 @@ const stageEnum = z.enum([
 ]);
 
 export const projectsRouter = router({
-  /** List all projects for current user, with optional filters */
+  /** List all projects — admin sees all org projects, others see only their own */
   list: protectedProcedure
     .input(
       z
@@ -41,10 +41,16 @@ export const projectsRouter = router({
         .optional(),
     )
     .query(async ({ ctx, input }) => {
+      const isAdmin = ctx.userRole === "admin";
+
       const conditions = [
-        eq(projects.userId, ctx.userId),
         eq(projects.organizationId, ctx.organizationId),
       ];
+
+      // Non-admin users only see their own projects
+      if (!isAdmin) {
+        conditions.push(eq(projects.userId, ctx.userId));
+      }
 
       if (input?.matterType) {
         conditions.push(eq(projects.matterType, input.matterType));
@@ -53,48 +59,39 @@ export const projectsRouter = router({
         conditions.push(eq(projects.stage, input.stage));
       }
 
+      // Single query with subqueries for counts — replaces N+1 Promise.all
       const rows = await db
         .select({
           project: projects,
           clientName: clients.name,
           clientType: clients.type,
+          document_count: sql<number>`(
+            SELECT count(*)::int FROM documents
+            WHERE documents.project_id = projects.id
+          )`,
+          chat_count: sql<number>`(
+            SELECT count(*)::int FROM chats
+            WHERE chats.project_id = projects.id
+          )`,
+          review_count: sql<number>`(
+            SELECT count(*)::int FROM tabular_reviews
+            WHERE tabular_reviews.project_id = projects.id
+          )`,
         })
         .from(projects)
         .leftJoin(clients, eq(projects.clientId, clients.id))
         .where(and(...conditions))
         .orderBy(desc(projects.createdAt));
 
-      // Attach counts
-      const result = await Promise.all(
-        rows.map(async (row) => {
-          const [docCount] = await db
-            .select({ count: sql<number>`count(*)` })
-            .from(documents)
-            .where(eq(documents.projectId, row.project.id));
-
-          const [chatCount] = await db
-            .select({ count: sql<number>`count(*)` })
-            .from(chats)
-            .where(eq(chats.projectId, row.project.id));
-
-          const [reviewCount] = await db
-            .select({ count: sql<number>`count(*)` })
-            .from(tabularReviews)
-            .where(eq(tabularReviews.projectId, row.project.id));
-
-          return {
-            ...row.project,
-            clientName: row.clientName,
-            clientType: row.clientType,
-            is_owner: true,
-            document_count: Number(docCount?.count ?? 0),
-            chat_count: Number(chatCount?.count ?? 0),
-            review_count: Number(reviewCount?.count ?? 0),
-          };
-        }),
-      );
-
-      return result;
+      return rows.map((row) => ({
+        ...row.project,
+        clientName: row.clientName,
+        clientType: row.clientType,
+        is_owner: row.project.userId === ctx.userId,
+        document_count: row.document_count ?? 0,
+        chat_count: row.chat_count ?? 0,
+        review_count: row.review_count ?? 0,
+      }));
     }),
 
   /** Get single project by ID */
@@ -176,16 +173,20 @@ export const projectsRouter = router({
       if (fields.stage !== undefined) updates.stage = fields.stage;
       if (fields.cmNumber !== undefined) updates.cmNumber = fields.cmNumber;
 
+      // Admin can update any project in org, others only their own
+      const conditions = [
+        eq(projects.id, projectId),
+        eq(projects.organizationId, ctx.organizationId),
+      ];
+
+      if (ctx.userRole !== "admin") {
+        conditions.push(eq(projects.userId, ctx.userId));
+      }
+
       await db
         .update(projects)
         .set(updates)
-        .where(
-          and(
-            eq(projects.id, projectId),
-            eq(projects.userId, ctx.userId),
-            eq(projects.organizationId, ctx.organizationId),
-          ),
-        );
+        .where(and(...conditions));
 
       return { ok: true };
     }),
@@ -216,15 +217,19 @@ export const projectsRouter = router({
   delete: protectedProcedure
     .input(z.object({ projectId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
+      const conditions = [
+        eq(projects.id, input.projectId),
+        eq(projects.organizationId, ctx.organizationId),
+      ];
+
+      if (ctx.userRole !== "admin") {
+        conditions.push(eq(projects.userId, ctx.userId));
+      }
+
       await db
         .delete(projects)
-        .where(
-          and(
-            eq(projects.id, input.projectId),
-            eq(projects.userId, ctx.userId),
-            eq(projects.organizationId, ctx.organizationId),
-          ),
-        );
+        .where(and(...conditions));
+
       return { ok: true };
     }),
 });

@@ -32,7 +32,7 @@ export default function SignInPage() {
         return;
       }
 
-      router.push("/assistant");
+      router.push("/chat");
       router.refresh();
     } catch {
       setError("Something went wrong. Please try again.");
@@ -57,7 +57,7 @@ export default function SignInPage() {
           <Input
             id="email"
             type="email"
-            placeholder="raul@pintolawgroup.com"
+            placeholder="youremail@email.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required
