@@ -8,6 +8,22 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+
+const SIGNUP_ENABLED = process.env.NEXT_PUBLIC_SIGNUP_ENABLED !== "false";
+const ALLOWED_DOMAINS = ["pintolawgroup.com"];
+
+function isDomainAllowed(email: string): boolean {
+  const domain = email.split("@")[1]?.toLowerCase();
+  return ALLOWED_DOMAINS.includes(domain);
+}
+
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
+
 export default function SignUpPage() {
   const router = useRouter();
   const [name, setName] = useState("");
@@ -17,9 +33,42 @@ export default function SignUpPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // Kill switch
+  if (!SIGNUP_ENABLED) {
+    return (
+      <div className="space-y-6">
+        <div className="text-center space-y-1">
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Pinto Law Legal OS
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            New accounts are not available at this time.
+          </p>
+        </div>
+        <p className="text-center text-sm text-muted-foreground">
+          Already have an account?{" "}
+          <Link
+            href="/auth/sign-in"
+            className="text-primary underline-offset-4 hover:underline font-medium"
+          >
+            Sign in
+          </Link>
+        </p>
+      </div>
+    );
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+
+    // Domain check
+    if (!isDomainAllowed(email)) {
+      setError(
+        "Sign up is restricted to @pintolawgroup.com email addresses.",
+      );
+      return;
+    }
 
     if (password !== confirmPassword) {
       setError("Passwords do not match.");
@@ -46,7 +95,18 @@ export default function SignUpPage() {
         return;
       }
 
-      router.push("/assistant");
+      // Auto-create user_profile
+      try {
+        await fetch("/api/auth/setup-profile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, email }),
+        });
+      } catch {
+        // Non-blocking — profile will be created on next load if this fails
+      }
+
+      router.push("/chat");
       router.refresh();
     } catch {
       setError("Something went wrong. Please try again.");
@@ -71,7 +131,7 @@ export default function SignUpPage() {
           <Input
             id="name"
             type="text"
-            placeholder="Raul Pinto"
+            placeholder="Your Name"
             value={name}
             onChange={(e) => setName(e.target.value)}
             required
@@ -85,12 +145,15 @@ export default function SignUpPage() {
           <Input
             id="email"
             type="email"
-            placeholder="raul@pintolawgroup.com"
+            placeholder="your_email@pintolawgroup.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required
             autoComplete="email"
           />
+          <p className="text-[11px] text-muted-foreground">
+            Only @pintolawgroup.com addresses can sign up.
+          </p>
         </div>
 
         <div className="space-y-2">
@@ -119,15 +182,9 @@ export default function SignUpPage() {
           />
         </div>
 
-        {error && (
-          <p className="text-sm text-red-600">{error}</p>
-        )}
+        {error && <p className="text-sm text-red-600">{error}</p>}
 
-        <Button
-          type="submit"
-          className="w-full"
-          disabled={loading}
-        >
+        <Button type="submit" className="w-full" disabled={loading}>
           {loading ? "Creating account..." : "Create account"}
         </Button>
       </form>

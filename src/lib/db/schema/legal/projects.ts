@@ -7,6 +7,8 @@ import {
   index,
 } from "drizzle-orm/pg-core";
 
+import { clients } from "./clients";
+
 // ---------------------------------------------------------------------------
 // projects — top-level containers (matters in legal context)
 // ---------------------------------------------------------------------------
@@ -17,7 +19,12 @@ export const projects = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     organizationId: text("organization_id").notNull(),
     userId: text("user_id").notNull(),
+    clientId: uuid("client_id").references(() => clients.id, {
+      onDelete: "set null",
+    }),
     name: text("name").notNull(),
+    matterType: text("matter_type"), // real_estate | criminal | business | municipal | landlord_tenant | estate_planning
+    stage: text("stage").notNull().default("intake"), // prospecting | intake | active | under_review | pending_client | complete | archived
     cmNumber: text("cm_number"),
     visibility: text("visibility").notNull().default("private"),
     sharedWith: jsonb("shared_with").notNull().default([]),
@@ -31,6 +38,8 @@ export const projects = pgTable(
   (table) => [
     index("idx_projects_user").on(table.userId),
     index("idx_projects_org").on(table.organizationId),
+    index("idx_projects_client").on(table.clientId),
+    index("idx_projects_stage").on(table.organizationId, table.stage),
   ],
 );
 

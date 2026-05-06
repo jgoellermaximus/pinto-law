@@ -5,22 +5,26 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useRouter } from "next/navigation";
 import {
   MessageSquare,
-  FolderOpen,
-  Table2,
-  Library,
   Send,
   Loader2,
-  PanelLeft,
   Plus,
-  LogOut,
   ChevronDown,
   Check,
+  PanelRight,
   FileText,
+  Upload,
+  Scale,
+  Copy,
+  CheckCheck,
 } from "lucide-react";
-import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PintoLogo } from "@/components/pinto-logo";
+import {
+  SidebarProvider,
+  AppLayout,
+  AppHeader,
+} from "@/components/app-sidebar";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -51,23 +55,124 @@ const MODELS = [
 const DEFAULT_MODEL = "anthropic/claude-sonnet-4-6";
 
 // ---------------------------------------------------------------------------
-// Nav items
+// Prompt suggestions
 // ---------------------------------------------------------------------------
 
-const NAV_ITEMS = [
-  { href: "/chat", label: "Assistant", icon: MessageSquare },
-  { href: "/deals", label: "Deals", icon: FileText },
-  { href: "/projects", label: "Projects", icon: FolderOpen },
-  { href: "/tabular-reviews", label: "Tabular Review", icon: Table2 },
-  { href: "/workflows", label: "Workflows", icon: Library },
+const SUGGESTIONS = [
+  {
+    label: "Attorney Review",
+    text: "What is the attorney review period in NJ real estate?",
+    icon: Scale,
+  },
+  {
+    label: "Expungement",
+    text: "Draft an expungement petition checklist for NJ",
+    icon: FileText,
+  },
+  {
+    label: "LLC Formation",
+    text: "NJ LLC formation requirements and steps",
+    icon: FileText,
+  },
+  {
+    label: "Tenant Rights",
+    text: "Landlord obligations under NJ tenant law",
+    icon: Scale,
+  },
 ];
 
 // ---------------------------------------------------------------------------
-// Component
+// Code block with copy button
+// ---------------------------------------------------------------------------
+
+function CodeBlock({
+  className,
+  children,
+  ...props
+}: React.HTMLAttributes<HTMLElement> & { children?: React.ReactNode }) {
+  const [copied, setCopied] = useState(false);
+  const isInline = !className;
+  const codeStr = String(children).replace(/\n$/, "");
+
+  if (isInline) {
+    return (
+      <code
+        className="rounded bg-gray-100 px-1.5 py-0.5 text-[13px] font-mono text-gray-800"
+        {...props}
+      >
+        {children}
+      </code>
+    );
+  }
+
+  const lang = className?.replace("language-", "") ?? "";
+
+  async function handleCopy() {
+    await navigator.clipboard.writeText(codeStr);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  return (
+    <div className="relative group my-3 rounded-lg overflow-hidden border border-gray-200">
+      {/* Header */}
+      <div className="flex items-center justify-between bg-gray-800 px-4 py-1.5">
+        <span className="text-[11px] text-gray-400 uppercase tracking-wider">
+          {lang || "code"}
+        </span>
+        <button
+          onClick={handleCopy}
+          className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-gray-200 transition-colors"
+        >
+          {copied ? (
+            <>
+              <CheckCheck className="h-3 w-3" /> Copied
+            </>
+          ) : (
+            <>
+              <Copy className="h-3 w-3" /> Copy
+            </>
+          )}
+        </button>
+      </div>
+      {/* Code */}
+      <pre className="bg-gray-900 px-4 py-3 overflow-x-auto">
+        <code
+          className={`text-[13px] leading-relaxed font-mono text-gray-100 ${className ?? ""}`}
+          {...props}
+        >
+          {children}
+        </code>
+      </pre>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Citation formatter — converts [1], [2] etc to styled references
+// ---------------------------------------------------------------------------
+
+function formatCitations(text: string): string {
+  return text.replace(
+    /\[(\d+)\]/g,
+    '<sup class="inline-flex items-center justify-center h-4 min-w-[16px] px-0.5 rounded bg-blue-100 text-blue-700 text-[10px] font-semibold cursor-pointer hover:bg-blue-200 transition-colors ml-0.5">$1</sup>',
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Chat Page
 // ---------------------------------------------------------------------------
 
 export default function ChatPage() {
-  const { user, isAuthenticated, authLoading, signOut } = useAuth();
+  return (
+    <SidebarProvider>
+      <ChatPageInner />
+    </SidebarProvider>
+  );
+}
+
+function ChatPageInner() {
+  const { user, isAuthenticated, authLoading } = useAuth();
   const router = useRouter();
 
   // Chat state
@@ -78,7 +183,7 @@ export default function ChatPage() {
   const [streamingContent, setStreamingContent] = useState("");
   const [model, setModel] = useState(DEFAULT_MODEL);
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [docPanelOpen, setDocPanelOpen] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -125,11 +230,9 @@ export default function ChatPage() {
     setInput("");
     setStreamingContent("");
 
-    // Build messages array
     const newUserMsg: Message = { role: "user", content: text };
     const allMessages = [...messages, newUserMsg];
 
-    // Create or update session
     let sessionId = activeSessionId;
     if (!sessionId) {
       sessionId = crypto.randomUUID();
@@ -216,7 +319,6 @@ export default function ChatPage() {
         }
       }
 
-      // Save assistant message to session
       const assistantMsg: Message = { role: "assistant", content: fullText };
       setSessions((prev) =>
         prev.map((s) =>
@@ -256,132 +358,66 @@ export default function ChatPage() {
   if (!isAuthenticated) return null;
 
   const selectedModel = MODELS.find((m) => m.id === model);
+  const firstName = user?.name?.split(" ")[0] ?? "there";
+
+  // ── Sidebar content: new chat + history ──
+  const sidebarContent = (
+    <>
+      <div className="pb-2 -mx-3">
+        <button
+          onClick={handleNewChat}
+          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 transition-colors"
+        >
+          <Plus className="h-4 w-4" />
+          New chat
+        </button>
+      </div>
+
+      <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+        History
+      </p>
+      {sessions.length === 0 && (
+        <p className="px-3 py-2 text-xs text-gray-400">No chats yet</p>
+      )}
+      {sessions.map((s) => (
+        <div
+          key={s.id}
+          className={`group flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors cursor-pointer ${
+            s.id === activeSessionId
+              ? "bg-gray-100 text-gray-900"
+              : "text-gray-500 hover:bg-gray-100"
+          }`}
+          onClick={() => {
+            setActiveSessionId(s.id);
+            setStreamingContent("");
+          }}
+        >
+          <MessageSquare className="h-3.5 w-3.5 flex-shrink-0" />
+          <span className="flex-1 truncate">{s.title}</span>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setSessions((prev) => prev.filter((x) => x.id !== s.id));
+              if (activeSessionId === s.id) {
+                setActiveSessionId(null);
+                setStreamingContent("");
+              }
+            }}
+            className="hidden group-hover:block text-gray-400 hover:text-red-500 transition-colors"
+            title="Delete chat"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          </button>
+        </div>
+      ))}
+    </>
+  );
 
   return (
-    <div className="flex h-dvh bg-white">
-      {/* ── Sidebar ── */}
-      <aside
-        className={`${
-          sidebarOpen ? "w-64" : "w-0"
-        } flex-shrink-0 overflow-hidden transition-all duration-200 border-r border-gray-100 bg-gray-50/70`}
-      >
-        <div className="flex h-full w-64 flex-col">
-          {/* Logo */}
-          <div className="flex items-center gap-3 px-4 h-16 border-b border-gray-100">
-            <PintoLogo size={36} />
-            <span className="text-xs font-semibold text-gray-400 uppercase tracking-widest">
-              Legal OS
-            </span>
-          </div>
-
-          {/* New chat */}
-          <div className="px-3 pt-3 pb-1">
-            <button
-              onClick={handleNewChat}
-              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 transition-colors"
-            >
-              <Plus className="h-4 w-4" />
-              New chat
-            </button>
-          </div>
-
-          {/* Nav */}
-          <nav className="px-3 py-2 space-y-0.5">
-            {NAV_ITEMS.map((item) => {
-              const Icon = item.icon;
-              const active = item.href === "/chat";
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors ${
-                    active
-                      ? "bg-gray-100 text-gray-900 font-medium"
-                      : "text-gray-500 hover:bg-gray-100 hover:text-gray-700"
-                  }`}
-                >
-                  <Icon className="h-4 w-4" />
-                  {item.label}
-                </Link>
-              );
-            })}
-          </nav>
-
-          {/* Chat history */}
-          <div className="flex-1 overflow-y-auto px-3 pt-2">
-            <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
-              History
-            </p>
-            {sessions.length === 0 && (
-              <p className="px-3 py-2 text-xs text-gray-400">No chats yet</p>
-            )}
-            {sessions.map((s) => (
-              <div
-                key={s.id}
-                className={`group flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors cursor-pointer ${
-                  s.id === activeSessionId
-                    ? "bg-gray-100 text-gray-900"
-                    : "text-gray-500 hover:bg-gray-100"
-                }`}
-                onClick={() => {
-                  setActiveSessionId(s.id);
-                  setStreamingContent("");
-                }}
-              >
-                <MessageSquare className="h-3.5 w-3.5 flex-shrink-0" />
-                <span className="flex-1 truncate">{s.title}</span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setSessions((prev) => prev.filter((x) => x.id !== s.id));
-                    if (activeSessionId === s.id) {
-                      setActiveSessionId(null);
-                      setStreamingContent("");
-                    }
-                  }}
-                  className="hidden group-hover:block text-gray-400 hover:text-red-500 transition-colors"
-                  title="Delete chat"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-                </button>
-              </div>
-            ))}
-          </div>
-
-          {/* User */}
-          <div className="border-t border-gray-100 px-3 py-3">
-            <div className="flex items-center gap-2.5 px-2">
-              <div className="h-7 w-7 rounded-full bg-gray-800 text-white flex items-center justify-center text-xs font-medium">
-                {user?.name?.[0] ?? user?.email?.[0] ?? "?"}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-gray-800 truncate">
-                  {user?.name ?? user?.email}
-                </p>
-              </div>
-              <button
-                onClick={() => signOut()}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
-                title="Sign out"
-              >
-                <LogOut className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-        </div>
-      </aside>
-
-      {/* ── Main ── */}
+    <AppLayout sidebarContent={sidebarContent}>
       <main className="flex flex-1 flex-col min-w-0">
-        {/* Top bar */}
-        <header className="flex items-center h-14 px-4 border-b border-gray-100 gap-2">
-          <button
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="text-gray-400 hover:text-gray-600 transition-colors"
-          >
-            <PanelLeft className="h-5 w-5" />
-          </button>
-          <div className="flex-1" />
+        {/* Header */}
+        <AppHeader>
           {/* Model selector */}
           <div className="relative">
             <button
@@ -416,133 +452,265 @@ export default function ChatPage() {
               </>
             )}
           </div>
-        </header>
 
-        {/* Chat area */}
-        <div className="flex-1 overflow-y-auto">
-          {messages.length === 0 && !streamingContent ? (
-            /* Empty state */
-            <div className="flex flex-col items-center justify-center h-full px-4">
-              <PintoLogo size={120} className="object-contain mb-6" />
-              <h1 className="text-2xl font-semibold text-gray-800 mb-1">
-                Hi, {user?.name?.split(" ")[0] ?? "there"}
-              </h1>
-              <p className="text-gray-400 text-sm mb-8">
-                Ask me anything about New Jersey law
-              </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-lg w-full">
-                {[
-                  "What is the attorney review period in NJ real estate?",
-                  "Draft an expungement petition checklist",
-                  "NJ LLC formation requirements and steps",
-                  "Landlord obligations under NJ tenant law",
-                ].map((q) => (
-                  <button
-                    key={q}
-                    onClick={() => {
-                      setInput(q);
-                      textareaRef.current?.focus();
-                    }}
-                    className="rounded-lg border border-gray-200 px-4 py-3 text-left text-sm text-gray-600 hover:bg-gray-50 hover:border-gray-300 transition-colors"
+          {/* Document panel toggle */}
+          <button
+            onClick={() => setDocPanelOpen(!docPanelOpen)}
+            className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium border transition-colors ${
+              docPanelOpen
+                ? "border-gray-900 bg-gray-900 text-white"
+                : "border-gray-200 text-gray-500 hover:border-gray-300"
+            }`}
+          >
+            <PanelRight className="h-3.5 w-3.5" />
+            Docs
+          </button>
+        </AppHeader>
+
+        {/* Content area */}
+        <div className="flex flex-1 overflow-hidden">
+          {/* Chat area */}
+          <div className="flex flex-1 flex-col min-w-0">
+            <div className="flex-1 overflow-y-auto">
+              {messages.length === 0 && !streamingContent ? (
+                /* ── Empty state ── */
+                <div className="flex flex-col items-center justify-center h-full px-4">
+                  <PintoLogo size={80} className="object-contain mb-6 opacity-80" />
+                  <h1
+                    className="text-3xl font-medium text-gray-800 mb-2"
+                    style={{ fontFamily: "var(--font-eb-garamond), Georgia, serif" }}
                   >
-                    {q}
-                  </button>
-                ))}
-              </div>
+                    Good {getTimeOfDay()}, {firstName}
+                  </h1>
+                  <p className="text-gray-400 text-sm mb-8">
+                    How can I help with your practice today?
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-lg w-full">
+                    {SUGGESTIONS.map((s) => {
+                      const Icon = s.icon;
+                      return (
+                        <button
+                          key={s.text}
+                          onClick={() => {
+                            setInput(s.text);
+                            textareaRef.current?.focus();
+                          }}
+                          className="flex items-start gap-3 rounded-xl border border-gray-200 px-4 py-3 text-left hover:bg-gray-50 hover:border-gray-300 transition-colors group"
+                        >
+                          <Icon className="h-4 w-4 text-gray-400 mt-0.5 group-hover:text-gray-600 transition-colors" />
+                          <div>
+                            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-0.5">
+                              {s.label}
+                            </p>
+                            <p className="text-sm text-gray-600">
+                              {s.text}
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
+                /* ── Messages ── */
+                <div className="max-w-3xl mx-auto px-4 py-6 space-y-1">
+                  {messages.map((msg, i) => (
+                    <MessageBubble key={i} message={msg} />
+                  ))}
+
+                  {/* Streaming */}
+                  {streamingContent && (
+                    <MessageBubble
+                      message={{ role: "assistant", content: streamingContent }}
+                      streaming
+                    />
+                  )}
+
+                  {/* Loading indicator */}
+                  {loading && !streamingContent && (
+                    <div className="flex items-start gap-3 py-4">
+                      <AssistantAvatar />
+                      <div className="rounded-2xl px-4 py-3 bg-gray-50">
+                        <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
+                      </div>
+                    </div>
+                  )}
+
+                  <div ref={messagesEndRef} />
+                </div>
+              )}
             </div>
-          ) : (
-            /* Messages */
-            <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
-              {messages.map((msg, i) => (
-                <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                  <div
-                    className={`max-w-[85%] rounded-2xl px-4 py-3 ${
-                      msg.role === "user"
-                        ? "bg-gray-900 text-white"
-                        : "bg-gray-50 text-gray-800"
+
+            {/* Input */}
+            <div className="border-t border-gray-100 px-4 py-3">
+              <div className="max-w-3xl mx-auto">
+                <div className="flex items-end gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2 focus-within:border-gray-400 transition-colors shadow-sm">
+                  <textarea
+                    ref={textareaRef}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSend();
+                      }
+                    }}
+                    placeholder="Ask about NJ law, review a contract, draft a document..."
+                    rows={1}
+                    className="flex-1 resize-none bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none"
+                    disabled={loading}
+                  />
+                  <button
+                    onClick={handleSend}
+                    disabled={loading || !input.trim()}
+                    className={`flex-shrink-0 rounded-lg p-2 transition-colors ${
+                      loading || !input.trim()
+                        ? "text-gray-300"
+                        : "text-white bg-gray-900 hover:bg-gray-800"
                     }`}
                   >
-                    {msg.role === "assistant" ? (
-                      <div className="prose prose-sm prose-gray max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {msg.content}
-                        </ReactMarkdown>
-                      </div>
+                    {loading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
-                      <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                      <Send className="h-4 w-4" />
                     )}
-                  </div>
+                  </button>
                 </div>
-              ))}
-
-              {/* Streaming */}
-              {streamingContent && (
-                <div className="flex justify-start">
-                  <div className="max-w-[85%] rounded-2xl px-4 py-3 bg-gray-50 text-gray-800">
-                    <div className="prose prose-sm prose-gray max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {streamingContent}
-                      </ReactMarkdown>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Loading indicator */}
-              {loading && !streamingContent && (
-                <div className="flex justify-start">
-                  <div className="rounded-2xl px-4 py-3 bg-gray-50">
-                    <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
-                  </div>
-                </div>
-              )}
-
-              <div ref={messagesEndRef} />
+                <p className="text-center text-[11px] text-gray-400 mt-2">
+                  AI can make mistakes. Verify important legal information independently.
+                </p>
+              </div>
             </div>
+          </div>
+
+          {/* ── Document Panel ── */}
+          {docPanelOpen && (
+            <aside className="w-72 border-l border-gray-100 bg-gray-50/50 flex flex-col overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+                <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                  Documents
+                </h3>
+                <button
+                  onClick={() => setDocPanelOpen(false)}
+                  className="text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  <PanelRight className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="flex-1 flex flex-col items-center justify-center px-6 text-center">
+                <div className="w-16 h-16 rounded-2xl bg-gray-100 flex items-center justify-center mb-4">
+                  <Upload className="h-7 w-7 text-gray-400" />
+                </div>
+                <p className="text-sm font-medium text-gray-600 mb-1">
+                  Upload documents
+                </p>
+                <p className="text-xs text-gray-400 leading-relaxed">
+                  Drop contracts, filings, or court documents here. The AI will
+                  read and reference them in your conversation.
+                </p>
+                <button className="mt-4 flex items-center gap-1.5 rounded-lg border border-gray-200 px-4 py-2 text-xs font-medium text-gray-600 hover:bg-white hover:border-gray-300 transition-colors">
+                  <Upload className="h-3.5 w-3.5" />
+                  Browse files
+                </button>
+                <p className="text-[10px] text-gray-400 mt-3">
+                  PDF, DOCX, TXT — processed 100% locally
+                </p>
+              </div>
+            </aside>
           )}
         </div>
-
-        {/* Input */}
-        <div className="border-t border-gray-100 px-4 py-3">
-          <div className="max-w-3xl mx-auto">
-            <div className="flex items-end gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2 focus-within:border-gray-400 transition-colors">
-              <textarea
-                ref={textareaRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    handleSend();
-                  }
-                }}
-                placeholder="Ask a question about your documents..."
-                rows={1}
-                className="flex-1 resize-none bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none"
-                disabled={loading}
-              />
-              <button
-                onClick={handleSend}
-                disabled={loading || !input.trim()}
-                className={`flex-shrink-0 rounded-lg p-2 transition-colors ${
-                  loading || !input.trim()
-                    ? "text-gray-300"
-                    : "text-white bg-gray-900 hover:bg-gray-800"
-                }`}
-              >
-                {loading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Send className="h-4 w-4" />
-                )}
-              </button>
-            </div>
-            <p className="text-center text-[11px] text-gray-400 mt-2">
-              AI can make mistakes. Answers are not legal advice.
-            </p>
-          </div>
-        </div>
       </main>
+    </AppLayout>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Message Bubble
+// ---------------------------------------------------------------------------
+
+function MessageBubble({
+  message,
+  streaming,
+}: {
+  message: Message;
+  streaming?: boolean;
+}) {
+  if (message.role === "user") {
+    return (
+      <div className="flex justify-end py-2">
+        <div className="max-w-[80%] rounded-2xl rounded-br-md px-4 py-3 bg-gray-900 text-white">
+          <p className="text-sm whitespace-pre-wrap leading-relaxed">
+            {message.content}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-start gap-3 py-4">
+      <AssistantAvatar />
+      <div className="flex-1 min-w-0 max-w-[85%]">
+        <div
+          className={`prose prose-sm prose-gray max-w-none
+            [&>*:first-child]:mt-0 [&>*:last-child]:mb-0
+            prose-headings:font-semibold prose-headings:text-gray-800
+            prose-h1:text-lg prose-h2:text-base prose-h3:text-sm
+            prose-p:leading-relaxed prose-p:text-gray-700
+            prose-li:text-gray-700 prose-li:leading-relaxed
+            prose-strong:text-gray-800 prose-strong:font-semibold
+            prose-a:text-blue-600 prose-a:no-underline hover:prose-a:underline
+            prose-blockquote:border-l-gray-300 prose-blockquote:text-gray-600
+            prose-hr:border-gray-200
+            ${streaming ? "animate-pulse-subtle" : ""}
+          `}
+        >
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              code: CodeBlock as any,
+              // Format citations in paragraphs
+              p: ({ children, ...props }) => (
+                <p
+                  {...props}
+                  dangerouslySetInnerHTML={
+                    typeof children === "string"
+                      ? { __html: formatCitations(children) }
+                      : undefined
+                  }
+                >
+                  {typeof children === "string" ? undefined : children}
+                </p>
+              ),
+            }}
+          >
+            {message.content}
+          </ReactMarkdown>
+        </div>
+      </div>
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Assistant Avatar
+// ---------------------------------------------------------------------------
+
+function AssistantAvatar() {
+  return (
+    <div className="flex-shrink-0 w-7 h-7 rounded-lg bg-gradient-to-br from-emerald-800 to-emerald-950 flex items-center justify-center mt-0.5">
+      <Scale className="h-3.5 w-3.5 text-emerald-200" />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Time of day helper
+// ---------------------------------------------------------------------------
+
+function getTimeOfDay(): string {
+  const hour = new Date().getHours();
+  if (hour < 12) return "morning";
+  if (hour < 17) return "afternoon";
+  return "evening";
 }

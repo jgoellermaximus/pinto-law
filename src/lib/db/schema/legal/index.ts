@@ -8,6 +8,10 @@ export {
 } from "./user-profiles";
 
 export {
+  clients,
+} from "./clients";
+
+export {
   projects,
   projectSubfolders,
 } from "./projects";

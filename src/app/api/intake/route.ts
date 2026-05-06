@@ -5,16 +5,103 @@
  * Saves the deal instantly, returns confirmation to the realtor immediately,
  * then generates the attorney review letter in the background.
  *
- * Future: intake type routes to the appropriate workflow template.
- * Prompts are saved on the record for tracking and optimization (AutoResearch).
+ * Flow:
+ * 1. Save deal_intakes record (form data)
+ * 2. Find or create client (by brokerage or realtor name)
+ * 3. Create project (matter_type: real_estate, stage: intake, linked to client)
+ * 4. Generate attorney review letter in background (fire-and-forget)
+ * 5. Return instant confirmation to realtor
  */
 
 import { db } from "@/lib/db";
-import { dealIntakes } from "@/lib/db/schema/legal";
+import {
+  dealIntakes,
+  clients,
+  projects,
+  userProfiles,
+} from "@/lib/db/schema/legal";
 import { completeText, DEFAULT_MAIN_MODEL } from "@/lib/llm";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 
 const ORG_ID = "pinto-law-group";
+
+// ---------------------------------------------------------------------------
+// Find the attorney user to assign projects to
+// ---------------------------------------------------------------------------
+
+async function getAttorneyUserId(): Promise<string> {
+  // First try: find an attorney
+  const [attorney] = await db
+    .select({ userId: userProfiles.userId })
+    .from(userProfiles)
+    .where(eq(userProfiles.role, "attorney"))
+    .limit(1);
+
+  if (attorney) return attorney.userId;
+
+  // Fallback: find an admin
+  const [admin] = await db
+    .select({ userId: userProfiles.userId })
+    .from(userProfiles)
+    .where(eq(userProfiles.role, "admin"))
+    .limit(1);
+
+  if (admin) return admin.userId;
+
+  // Last resort: first user
+  const [any] = await db
+    .select({ userId: userProfiles.userId })
+    .from(userProfiles)
+    .limit(1);
+
+  if (any) return any.userId;
+
+  throw new Error("No users found — cannot assign project");
+}
+
+// ---------------------------------------------------------------------------
+// Find or create client
+// ---------------------------------------------------------------------------
+
+async function findOrCreateClient(
+  realtorName: string,
+  realtorBrokerage: string | null,
+  realtorEmail: string | null,
+  realtorPhone: string | null,
+): Promise<string> {
+  const clientName = realtorBrokerage?.trim() || realtorName.trim();
+  const clientType = realtorBrokerage ? "brokerage" : "individual";
+
+  // Check if client already exists
+  const [existing] = await db
+    .select({ id: clients.id })
+    .from(clients)
+    .where(
+      and(eq(clients.organizationId, ORG_ID), eq(clients.name, clientName)),
+    )
+    .limit(1);
+
+  if (existing) return existing.id;
+
+  // Create new client
+  const [newClient] = await db
+    .insert(clients)
+    .values({
+      organizationId: ORG_ID,
+      name: clientName,
+      type: clientType,
+      email: realtorEmail,
+      phone: realtorPhone,
+    })
+    .returning({ id: clients.id });
+
+  console.log(`[intake] Created client: ${clientName} (${clientType})`);
+  return newClient.id;
+}
+
+// ---------------------------------------------------------------------------
+// Letter prompt builder
+// ---------------------------------------------------------------------------
 
 function buildLetterPrompt(deal: Record<string, string>): string {
   const price = Number(deal.purchasePrice).toLocaleString("en-US", {
@@ -85,7 +172,7 @@ async function generateLetterInBackground(
     },
   });
 
-  // Save letter + the prompt used (for AutoResearch optimization tracking)
+  // Save letter + update status
   await db
     .update(dealIntakes)
     .set({
@@ -153,8 +240,40 @@ export async function POST(req: Request) {
       })
       .returning();
 
-    // 2. Return instantly — realtor sees immediate confirmation
-    // 3. Generate letter in background (fire-and-forget)
+    // 2. Find or create client
+    let clientId: string | null = null;
+    try {
+      clientId = await findOrCreateClient(
+        body.realtorName.trim(),
+        body.realtorBrokerage?.trim() || null,
+        body.realtorEmail?.trim() || null,
+        body.realtorPhone?.trim() || null,
+      );
+    } catch (err) {
+      console.error("[intake] client creation failed:", err);
+    }
+
+    // 3. Create project
+    try {
+      const userId = await getAttorneyUserId();
+      const projectName = `${body.propertyAddress.trim()}, ${body.propertyCity.trim()} — ${body.buyerName.trim()}/${body.sellerName.trim()}`;
+
+      await db.insert(projects).values({
+        organizationId: ORG_ID,
+        userId,
+        clientId,
+        name: projectName,
+        matterType: "real_estate",
+        stage: "intake",
+      });
+
+      console.log(`[intake] Created project: ${projectName}`);
+    } catch (err) {
+      console.error("[intake] project creation failed:", err);
+    }
+
+    // 4. Return instantly — realtor sees immediate confirmation
+    // 5. Generate letter in background (fire-and-forget)
     generateLetterInBackground(intake.id, body).catch((err) =>
       console.error("[intake] background generation failed:", err),
     );

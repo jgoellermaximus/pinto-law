@@ -21,6 +21,7 @@ export const userProfiles = pgTable(
     userId: text("user_id").notNull().unique(),
     displayName: text("display_name"),
     organisation: text("organisation"),
+    role: text("role").notNull().default("attorney"), // attorney | paralegal | partner | client
     tier: text("tier").notNull().default("Free"),
     messageCreditsUsed: integer("message_credits_used").notNull().default(0),
     creditsResetDate: timestamp("credits_reset_date", { withTimezone: true })

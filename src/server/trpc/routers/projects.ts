@@ -7,60 +7,108 @@ import {
   documents,
   chats,
   tabularReviews,
+  clients,
 } from "@/lib/db/schema/legal";
 
+const matterTypeEnum = z.enum([
+  "real_estate",
+  "criminal",
+  "business",
+  "municipal",
+  "landlord_tenant",
+  "estate_planning",
+]);
+
+const stageEnum = z.enum([
+  "prospecting",
+  "intake",
+  "active",
+  "under_review",
+  "pending_client",
+  "complete",
+  "archived",
+]);
+
 export const projectsRouter = router({
-  /** List all projects for current user */
-  list: protectedProcedure.query(async ({ ctx }) => {
-    const rows = await db
-      .select()
-      .from(projects)
-      .where(
-        and(
-          eq(projects.userId, ctx.userId),
-          eq(projects.organizationId, ctx.organizationId),
-        ),
-      )
-      .orderBy(desc(projects.createdAt));
+  /** List all projects for current user, with optional filters */
+  list: protectedProcedure
+    .input(
+      z
+        .object({
+          matterType: matterTypeEnum.optional(),
+          stage: stageEnum.optional(),
+        })
+        .optional(),
+    )
+    .query(async ({ ctx, input }) => {
+      const conditions = [
+        eq(projects.userId, ctx.userId),
+        eq(projects.organizationId, ctx.organizationId),
+      ];
 
-    // Attach counts
-    const result = await Promise.all(
-      rows.map(async (p) => {
-        const [docCount] = await db
-          .select({ count: sql<number>`count(*)` })
-          .from(documents)
-          .where(eq(documents.projectId, p.id));
+      if (input?.matterType) {
+        conditions.push(eq(projects.matterType, input.matterType));
+      }
+      if (input?.stage) {
+        conditions.push(eq(projects.stage, input.stage));
+      }
 
-        const [chatCount] = await db
-          .select({ count: sql<number>`count(*)` })
-          .from(chats)
-          .where(eq(chats.projectId, p.id));
+      const rows = await db
+        .select({
+          project: projects,
+          clientName: clients.name,
+          clientType: clients.type,
+        })
+        .from(projects)
+        .leftJoin(clients, eq(projects.clientId, clients.id))
+        .where(and(...conditions))
+        .orderBy(desc(projects.createdAt));
 
-        const [reviewCount] = await db
-          .select({ count: sql<number>`count(*)` })
-          .from(tabularReviews)
-          .where(eq(tabularReviews.projectId, p.id));
+      // Attach counts
+      const result = await Promise.all(
+        rows.map(async (row) => {
+          const [docCount] = await db
+            .select({ count: sql<number>`count(*)` })
+            .from(documents)
+            .where(eq(documents.projectId, row.project.id));
 
-        return {
-          ...p,
-          is_owner: true,
-          document_count: Number(docCount?.count ?? 0),
-          chat_count: Number(chatCount?.count ?? 0),
-          review_count: Number(reviewCount?.count ?? 0),
-        };
-      }),
-    );
+          const [chatCount] = await db
+            .select({ count: sql<number>`count(*)` })
+            .from(chats)
+            .where(eq(chats.projectId, row.project.id));
 
-    return result;
-  }),
+          const [reviewCount] = await db
+            .select({ count: sql<number>`count(*)` })
+            .from(tabularReviews)
+            .where(eq(tabularReviews.projectId, row.project.id));
+
+          return {
+            ...row.project,
+            clientName: row.clientName,
+            clientType: row.clientType,
+            is_owner: true,
+            document_count: Number(docCount?.count ?? 0),
+            chat_count: Number(chatCount?.count ?? 0),
+            review_count: Number(reviewCount?.count ?? 0),
+          };
+        }),
+      );
+
+      return result;
+    }),
 
   /** Get single project by ID */
   get: protectedProcedure
     .input(z.object({ projectId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
-      const [project] = await db
-        .select()
+      const [row] = await db
+        .select({
+          project: projects,
+          clientName: clients.name,
+          clientType: clients.type,
+        })
         .from(projects)
+        .leftJoin(clients, eq(projects.clientId, clients.id))
         .where(
           and(
             eq(projects.id, input.projectId),
@@ -69,8 +117,12 @@ export const projectsRouter = router({
         )
         .limit(1);
 
-      if (!project) return null;
-      return project;
+      if (!row) return null;
+      return {
+        ...row.project,
+        clientName: row.clientName,
+        clientType: row.clientType,
+      };
     }),
 
   /** Create a new project (matter) */
@@ -78,6 +130,9 @@ export const projectsRouter = router({
     .input(
       z.object({
         name: z.string().min(1),
+        clientId: z.string().uuid().optional(),
+        matterType: matterTypeEnum.optional(),
+        stage: stageEnum.optional(),
         cmNumber: z.string().optional(),
       }),
     )
@@ -88,6 +143,9 @@ export const projectsRouter = router({
           organizationId: ctx.organizationId,
           userId: ctx.userId,
           name: input.name.trim(),
+          clientId: input.clientId ?? null,
+          matterType: input.matterType ?? null,
+          stage: input.stage ?? "intake",
           cmNumber: input.cmNumber ?? null,
         })
         .returning();
@@ -95,7 +153,44 @@ export const projectsRouter = router({
       return project;
     }),
 
-  /** Rename a project */
+  /** Update a project */
+  update: protectedProcedure
+    .input(
+      z.object({
+        projectId: z.string().uuid(),
+        name: z.string().min(1).optional(),
+        clientId: z.string().uuid().nullable().optional(),
+        matterType: matterTypeEnum.nullable().optional(),
+        stage: stageEnum.optional(),
+        cmNumber: z.string().nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { projectId, ...fields } = input;
+
+      const updates: Record<string, unknown> = { updatedAt: new Date() };
+      if (fields.name !== undefined) updates.name = fields.name.trim();
+      if (fields.clientId !== undefined) updates.clientId = fields.clientId;
+      if (fields.matterType !== undefined)
+        updates.matterType = fields.matterType;
+      if (fields.stage !== undefined) updates.stage = fields.stage;
+      if (fields.cmNumber !== undefined) updates.cmNumber = fields.cmNumber;
+
+      await db
+        .update(projects)
+        .set(updates)
+        .where(
+          and(
+            eq(projects.id, projectId),
+            eq(projects.userId, ctx.userId),
+            eq(projects.organizationId, ctx.organizationId),
+          ),
+        );
+
+      return { ok: true };
+    }),
+
+  /** Rename a project (kept for backward compat) */
   rename: protectedProcedure
     .input(
       z.object({
