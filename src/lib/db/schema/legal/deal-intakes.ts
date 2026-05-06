@@ -58,6 +58,10 @@ export const dealIntakes = pgTable(
     generatedLetter: text("generated_letter"),
     approvedLetter: text("approved_letter"),
 
+    // Generated document (DOCX merge result stored in R2)
+    generatedDocPath: text("generated_doc_path"),
+    generatedDocFilename: text("generated_doc_filename"),
+
     // Notes from attorney
     attorneyNotes: text("attorney_notes"),
 

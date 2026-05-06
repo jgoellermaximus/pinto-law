@@ -26,6 +26,9 @@ export const projects = pgTable(
     matterType: text("matter_type"), // real_estate | criminal | business | municipal | landlord_tenant | estate_planning
     stage: text("stage").notNull().default("intake"), // prospecting | intake | active | under_review | pending_client | complete | archived
     cmNumber: text("cm_number"),
+    description: text("description"),
+    notes: text("notes"),
+    dealIntakeId: uuid("deal_intake_id"),
     visibility: text("visibility").notNull().default("private"),
     sharedWith: jsonb("shared_with").notNull().default([]),
     createdAt: timestamp("created_at", { withTimezone: true })

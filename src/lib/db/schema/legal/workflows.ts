@@ -10,7 +10,21 @@ import {
 } from "drizzle-orm/pg-core";
 
 // ---------------------------------------------------------------------------
-// workflows — reusable prompt templates (attorney review letter, etc.)
+// workflows — prompt templates AND document templates
+//
+// Two types of workflows:
+//
+// 1. templateType = "prompt" (original)
+//    - promptMd contains AI instructions
+//    - No DOCX file involved
+//    - AI generates content from scratch
+//
+// 2. templateType = "document" (new)
+//    - templateStoragePath points to a DOCX in R2
+//    - templateFields defines the merge fields ({{BUYER_NAME}}, etc.)
+//    - promptMd is optional — used for Layer 2 AI review after merge
+//    - System does mechanical merge, optionally AI reviews result
+//
 // organization_id is nullable because system/builtin workflows (is_system=true)
 // are global and not org-scoped.
 // ---------------------------------------------------------------------------
@@ -22,11 +36,30 @@ export const workflows = pgTable(
     organizationId: text("organization_id"),
     userId: text("user_id"),
     title: text("title").notNull(),
-    type: text("type").notNull(),
-    promptMd: text("prompt_md"),
-    columnsConfig: jsonb("columns_config"),
+    type: text("type").notNull(), // "chat" | "tabular"
+
+    // ── Template type ──
+    // "prompt" = AI prompt template (promptMd is the content)
+    // "document" = DOCX merge template (templateStoragePath + templateFields)
+    templateType: text("template_type").notNull().default("prompt"),
+
+    // ── Prompt template fields ──
+    promptMd: text("prompt_md"), // AI instructions (or Layer 2 review prompt for document templates)
+    columnsConfig: jsonb("columns_config"), // tabular review columns
+
+    // ── Document template fields ──
+    templateStoragePath: text("template_storage_path"), // R2 key to DOCX file
+    templateFileName: text("template_file_name"), // Original upload filename
+    templateFields: jsonb("template_fields"), // MergeField[] — defines placeholders + mappings
+
+    // ── Metadata ──
     practice: text("practice"),
     isSystem: boolean("is_system").notNull().default(false),
+
+    // ── Intake routing ──
+    intakeType: text("intake_type"),
+    isDefault: boolean("is_default").notNull().default(false),
+
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -34,6 +67,8 @@ export const workflows = pgTable(
   (table) => [
     index("idx_workflows_user").on(table.userId),
     index("idx_workflows_org").on(table.organizationId),
+    index("idx_workflows_intake_type").on(table.intakeType),
+    index("idx_workflows_template_type").on(table.templateType),
   ],
 );
 

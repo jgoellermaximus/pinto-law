@@ -10,6 +10,10 @@
  * 2. Find or create client (by brokerage or realtor name)
  * 3. Create project (matter_type: real_estate, stage: intake, linked to client)
  * 4. Generate attorney review letter in background (fire-and-forget)
+ *    → resolves default workflow template for "attorney_review" intake type
+ *    → document template: DOCX merge → upload to R2 → link to deal
+ *    → prompt template: AI generation → save text to deal
+ *    → falls back to hardcoded prompt if no workflow exists
  * 5. Return instant confirmation to realtor
  */
 
@@ -21,7 +25,13 @@ import {
   userProfiles,
 } from "@/lib/db/schema/legal";
 import { completeText, DEFAULT_MAIN_MODEL } from "@/lib/llm";
+import {
+  getIntakePrompt,
+  resolveIntakeTemplate,
+} from "@/lib/legal/getIntakePrompt";
+import { uploadFile, generatedDocKey } from "@/lib/storage";
 import { eq, and } from "drizzle-orm";
+import { logActivity } from "@/lib/activity";
 
 const ORG_ID = "pinto-law-group";
 
@@ -30,7 +40,6 @@ const ORG_ID = "pinto-law-group";
 // ---------------------------------------------------------------------------
 
 async function getAttorneyUserId(): Promise<string> {
-  // First try: find an attorney
   const [attorney] = await db
     .select({ userId: userProfiles.userId })
     .from(userProfiles)
@@ -39,7 +48,6 @@ async function getAttorneyUserId(): Promise<string> {
 
   if (attorney) return attorney.userId;
 
-  // Fallback: find an admin
   const [admin] = await db
     .select({ userId: userProfiles.userId })
     .from(userProfiles)
@@ -48,7 +56,6 @@ async function getAttorneyUserId(): Promise<string> {
 
   if (admin) return admin.userId;
 
-  // Last resort: first user
   const [any] = await db
     .select({ userId: userProfiles.userId })
     .from(userProfiles)
@@ -72,7 +79,6 @@ async function findOrCreateClient(
   const clientName = realtorBrokerage?.trim() || realtorName.trim();
   const clientType = realtorBrokerage ? "brokerage" : "individual";
 
-  // Check if client already exists
   const [existing] = await db
     .select({ id: clients.id })
     .from(clients)
@@ -83,7 +89,6 @@ async function findOrCreateClient(
 
   if (existing) return existing.id;
 
-  // Create new client
   const [newClient] = await db
     .insert(clients)
     .values({
@@ -100,20 +105,17 @@ async function findOrCreateClient(
 }
 
 // ---------------------------------------------------------------------------
-// Letter prompt builder
+// Build deal details string for prompt substitution
 // ---------------------------------------------------------------------------
 
-function buildLetterPrompt(deal: Record<string, string>): string {
+function buildDealDetails(deal: Record<string, string>): string {
   const price = Number(deal.purchasePrice).toLocaleString("en-US", {
     style: "currency",
     currency: "USD",
     maximumFractionDigits: 0,
   });
 
-  return `You are drafting an Attorney Review Letter for a New Jersey residential real estate transaction on behalf of Raul J. Pinto, Esq., Pinto Law Group, Elizabeth, NJ.
-
-DEAL DETAILS:
-- Property: ${deal.propertyAddress}, ${deal.propertyCity}, NJ ${deal.propertyZip}
+  return `- Property: ${deal.propertyAddress}, ${deal.propertyCity}, NJ ${deal.propertyZip}
 - Buyer: ${deal.buyerName}
 - Seller: ${deal.sellerName}
 - Purchase Price: ${price}
@@ -121,43 +123,79 @@ DEAL DETAILS:
 - Mortgage Contingency: ${deal.mortgageContingency}
 - Inspection Contingency: ${deal.inspectionContingency}
 - Representing: ${deal.representingSide}
-- Realtor: ${deal.realtorName}, ${deal.realtorBrokerage || "Independent"}
-${deal.additionalTerms ? `- Additional Terms: ${deal.additionalTerms}` : ""}
-
-Draft a professional NJ Attorney Review Letter that:
-
-1. States that this letter is written pursuant to the three-business-day attorney review period customary in New Jersey residential real estate transactions
-2. Identifies the parties, property, and purchase price
-3. Includes standard NJ attorney review modifications:
-   - Home inspection contingency (if applicable)
-   - Mortgage contingency with specific terms (if applicable)
-   - Clear title requirement
-   - Smoke detector / CO detector compliance (NJ requirement)
-   - Certificate of Occupancy / Certificate of Continued Occupancy
-   - Flood zone disclosure
-   - Final walk-through rights
-   - Prorations (taxes, utilities, HOA if applicable)
-   - Time is of the essence clause
-4. Notes any specific issues based on the deal details provided
-5. Closes with standard attorney review letter language
-
-Format as a professional letter from:
-Raul J. Pinto, Esq.
-Pinto Law Group
-Elizabeth, New Jersey
-
-The letter should be thorough but concise, following NJ real estate attorney review conventions. Use formal legal language appropriate for a small-firm NJ practitioner.`;
+- Realtor: ${deal.realtorName}, ${deal.realtorBrokerage || "Independent"}${deal.additionalTerms ? `\n- Additional Terms: ${deal.additionalTerms}` : ""}`;
 }
 
 // ---------------------------------------------------------------------------
 // Background letter generation — fire-and-forget after instant response
+// Handles both document (DOCX merge) and prompt (AI generation) templates
 // ---------------------------------------------------------------------------
 
 async function generateLetterInBackground(
   intakeId: string,
   dealData: Record<string, string>,
 ) {
-  const prompt = buildLetterPrompt(dealData);
+  const result = await resolveIntakeTemplate("attorney_review", dealData);
+
+  console.log(
+    `[intake] Template resolved: type=${result.type}, workflow=${
+      result.workflowTitle ?? "fallback"
+    }`,
+  );
+
+  if (result.type === "document") {
+    // ── DOCX merge path ──
+    const r2Key = generatedDocKey(intakeId, result.filename);
+
+    await uploadFile(
+      r2Key,
+      result.buffer,
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    );
+
+    console.log(
+      `[intake] DOCX uploaded to R2: ${r2Key} (${result.filledFields.length} fields filled, ${result.missingFields.length} missing)`,
+    );
+
+    if (result.missingFields.length > 0) {
+      console.warn(
+        `[intake] Missing merge fields: ${result.missingFields.join(", ")}`,
+      );
+    }
+
+    await db
+      .update(dealIntakes)
+      .set({
+        generatedDocPath: r2Key,
+        generatedDocFilename: result.filename,
+        status: "letter_generated",
+        updatedAt: new Date(),
+      })
+      .where(eq(dealIntakes.id, intakeId));
+
+    console.log(`[intake] DOCX merge complete for ${intakeId}`);
+
+    logActivity({
+      organizationId: ORG_ID,
+      actorType: "system",
+      action: "docx_merged",
+      entityType: "deal_intake",
+      entityId: intakeId,
+      metadata: {
+        workflowTitle: result.workflowTitle,
+        filename: result.filename,
+        filledFields: result.filledFields.length,
+        missingFields: result.missingFields,
+      },
+    }).catch(console.error);
+
+    return;
+  }
+
+  // ── Prompt (AI generation) path ──
+  const dealDetails = buildDealDetails(dealData);
+  const prompt = result.prompt.replace("{{DEAL_DETAILS}}", dealDetails);
+
   const model = DEFAULT_MAIN_MODEL;
   const systemPrompt =
     "You are a New Jersey real estate attorney drafting professional legal documents. Be thorough and precise.";
@@ -172,7 +210,6 @@ async function generateLetterInBackground(
     },
   });
 
-  // Save letter + update status
   await db
     .update(dealIntakes)
     .set({
@@ -182,7 +219,20 @@ async function generateLetterInBackground(
     })
     .where(eq(dealIntakes.id, intakeId));
 
-  console.log(`[intake] Letter generated for ${intakeId}`);
+  console.log(`[intake] AI letter generated for ${intakeId}`);
+
+  logActivity({
+    organizationId: ORG_ID,
+    actorType: "system",
+    action: "letter_generated",
+    entityType: "deal_intake",
+    entityId: intakeId,
+    metadata: {
+      workflowId: result.workflowId,
+      workflowTitle: result.workflowTitle,
+      templateType: "prompt",
+    },
+  }).catch(console.error);
 }
 
 // ---------------------------------------------------------------------------
@@ -240,6 +290,22 @@ export async function POST(req: Request) {
       })
       .returning();
 
+    // Log intake submission — attribute to the realtor who submitted
+    logActivity({
+      organizationId: ORG_ID,
+      actorType: "system",
+      actorName: `${body.realtorName.trim()}${body.realtorBrokerage ? ` (${body.realtorBrokerage.trim()})` : ""}`,
+      action: "intake_submitted",
+      entityType: "deal_intake",
+      entityId: intake.id,
+      metadata: {
+        propertyAddress: body.propertyAddress.trim(),
+        buyerName: body.buyerName.trim(),
+        sellerName: body.sellerName.trim(),
+        realtorName: body.realtorName.trim(),
+      },
+    }).catch(console.error);
+
     // 2. Find or create client
     let clientId: string | null = null;
     try {
@@ -258,6 +324,8 @@ export async function POST(req: Request) {
       const userId = await getAttorneyUserId();
       const projectName = `${body.propertyAddress.trim()}, ${body.propertyCity.trim()} — ${body.buyerName.trim()}/${body.sellerName.trim()}`;
 
+      const desc = `Real estate intake: ${body.buyerName.trim()} purchasing ${body.propertyAddress.trim()}, ${body.propertyCity.trim()} NJ ${body.propertyZip.trim()} for ${Number(body.purchasePrice).toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 })}. Submitted by ${body.realtorName.trim()}${body.realtorBrokerage ? ` (${body.realtorBrokerage.trim()})` : ""}.`;
+
       await db.insert(projects).values({
         organizationId: ORG_ID,
         userId,
@@ -265,6 +333,8 @@ export async function POST(req: Request) {
         name: projectName,
         matterType: "real_estate",
         stage: "intake",
+        description: desc,
+        dealIntakeId: intake.id,
       });
 
       console.log(`[intake] Created project: ${projectName}`);

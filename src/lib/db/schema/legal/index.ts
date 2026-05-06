@@ -43,3 +43,6 @@ export {
 export {
   dealIntakes,
 } from "./deal-intakes";
+export {
+  activityLog,
+} from "./activity-log";

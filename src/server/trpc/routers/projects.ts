@@ -9,6 +9,7 @@ import {
   tabularReviews,
   clients,
 } from "@/lib/db/schema/legal";
+import { logUserActivity } from "@/lib/activity";
 
 const matterTypeEnum = z.enum([
   "real_estate",
@@ -131,6 +132,7 @@ export const projectsRouter = router({
         matterType: matterTypeEnum.optional(),
         stage: stageEnum.optional(),
         cmNumber: z.string().optional(),
+        description: z.string().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -144,6 +146,7 @@ export const projectsRouter = router({
           matterType: input.matterType ?? null,
           stage: input.stage ?? "intake",
           cmNumber: input.cmNumber ?? null,
+          description: input.description ?? null,
         })
         .returning();
 
@@ -160,9 +163,11 @@ export const projectsRouter = router({
         matterType: matterTypeEnum.nullable().optional(),
         stage: stageEnum.optional(),
         cmNumber: z.string().nullable().optional(),
+        description: z.string().nullable().optional(),
+        notes: z.string().nullable().optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+     .mutation(async ({ ctx, input }) => {
       const { projectId, ...fields } = input;
 
       const updates: Record<string, unknown> = { updatedAt: new Date() };
@@ -172,6 +177,9 @@ export const projectsRouter = router({
         updates.matterType = fields.matterType;
       if (fields.stage !== undefined) updates.stage = fields.stage;
       if (fields.cmNumber !== undefined) updates.cmNumber = fields.cmNumber;
+      if (fields.description !== undefined)
+        updates.description = fields.description;
+      if (fields.notes !== undefined) updates.notes = fields.notes;
 
       // Admin can update any project in org, others only their own
       const conditions = [
@@ -187,6 +195,18 @@ export const projectsRouter = router({
         .update(projects)
         .set(updates)
         .where(and(...conditions));
+
+      // Log stage changes and note updates
+      if (fields.stage !== undefined) {
+        logUserActivity(ctx, "stage_changed", "project", projectId, {
+          to: fields.stage,
+        }).catch(console.error);
+      }
+      if (fields.notes !== undefined) {
+        logUserActivity(ctx, "note_updated", "project", projectId).catch(
+          console.error,
+        );
+      }
 
       return { ok: true };
     }),

@@ -1,26 +1,22 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useRouter } from "next/navigation";
 import { trpc } from "@/trpc/client";
 import {
   Loader2,
-  CheckCircle2,
-  Clock,
-  FileText,
   Plus,
   LayoutGrid,
   List,
   X,
-  Home,
-  Calendar,
   User,
+  Calendar,
   Briefcase,
-  Scale,
-  Building2,
-  Gavel,
   Filter,
+  FileText,
+  Scale,
+  Check,
 } from "lucide-react";
 import {
   SidebarProvider,
@@ -36,6 +32,17 @@ import {
 } from "@/components/kibo-ui/kanban";
 import type { DragEndEvent } from "@/components/kibo-ui/kanban";
 import { CreateDealModal } from "@/components/deals/create-deal-modal";
+import { ActivityTimeline } from "@/components/deals/activity-timeline";
+import { DataTable, SortHeader, type ColumnDef } from "@/components/data-table";
+import {
+  MATTER_TYPES,
+  STAGES,
+  formatMatterType,
+  formatStage,
+  MatterBadge,
+  StageBadge,
+  StageBadgeFull,
+} from "@/components/shared";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -60,6 +67,9 @@ type Project = {
   document_count: number;
   chat_count: number;
   review_count: number;
+  description: string | null;
+  notes: string | null;
+  dealIntakeId: string | null;
 };
 
 interface KanbanProject {
@@ -71,39 +81,84 @@ interface KanbanProject {
 }
 
 // ---------------------------------------------------------------------------
-// Pipeline columns (project stages)
+// Pipeline columns (for kanban)
 // ---------------------------------------------------------------------------
 
-const STAGE_COLUMNS = [
-  { id: "prospecting", name: "Prospecting" },
-  { id: "intake", name: "Intake" },
-  { id: "active", name: "Active" },
-  { id: "under_review", name: "Under Review" },
-  { id: "pending_client", name: "Pending Client" },
-  { id: "complete", name: "Complete" },
-  { id: "archived", name: "Archived" },
+const STAGE_COLUMNS = STAGES.map((s) => ({ id: s.value, name: s.label }));
+
+// ---------------------------------------------------------------------------
+// DataTable columns (for list view)
+// ---------------------------------------------------------------------------
+
+const listColumns: ColumnDef<Project>[] = [
+  {
+    accessorKey: "name",
+    header: ({ column }) => <SortHeader column={column} title="Name" />,
+    cell: ({ row }) => (
+      <div className="min-w-[200px]">
+        <p className="font-medium text-gray-800 truncate max-w-[300px]">
+          {row.original.name}
+        </p>
+      </div>
+    ),
+  },
+  {
+    accessorKey: "clientName",
+    header: ({ column }) => <SortHeader column={column} title="Client" />,
+    cell: ({ row }) => (
+      <div className="flex items-center gap-1.5">
+        <User className="h-3.5 w-3.5 text-gray-400" />
+        <span className="text-sm text-gray-600 truncate max-w-[160px]">
+          {row.original.clientName ?? "—"}
+        </span>
+      </div>
+    ),
+  },
+  {
+    accessorKey: "matterType",
+    header: ({ column }) => <SortHeader column={column} title="Type" />,
+    cell: ({ row }) => <MatterBadge type={row.original.matterType} />,
+    filterFn: (row, _id, filterValue: string[]) => {
+      if (!filterValue.length) return true;
+      return filterValue.includes(row.original.matterType ?? "");
+    },
+  },
+  {
+    accessorKey: "stage",
+    header: ({ column }) => <SortHeader column={column} title="Stage" />,
+    cell: ({ row }) => <StageBadge stage={row.original.stage} />,
+    filterFn: (row, _id, filterValue: string[]) => {
+      if (!filterValue.length) return true;
+      return filterValue.includes(row.original.stage);
+    },
+  },
+  {
+    accessorKey: "document_count",
+    header: ({ column }) => <SortHeader column={column} title="Docs" />,
+    cell: ({ row }) => (
+      <span className="text-sm text-gray-500 tabular-nums">
+        {row.original.document_count}
+      </span>
+    ),
+  },
+  {
+    accessorKey: "createdAt",
+    header: ({ column }) => <SortHeader column={column} title="Created" />,
+    cell: ({ row }) => (
+      <div className="flex items-center gap-1.5">
+        <Calendar className="h-3.5 w-3.5 text-gray-400" />
+        <span className="text-sm text-gray-500">
+          {new Date(row.original.createdAt).toLocaleDateString("en-US", {
+            month: "short",
+            day: "numeric",
+            year: "numeric",
+          })}
+        </span>
+      </div>
+    ),
+    sortingFn: "datetime",
+  },
 ];
-
-// ---------------------------------------------------------------------------
-// Matter type config
-// ---------------------------------------------------------------------------
-
-const MATTER_TYPES = [
-  { value: "real_estate", label: "Real Estate", icon: Home },
-  { value: "criminal", label: "Criminal", icon: Gavel },
-  { value: "business", label: "Business", icon: Building2 },
-  { value: "municipal", label: "Municipal", icon: Scale },
-  { value: "landlord_tenant", label: "Landlord/Tenant", icon: Briefcase },
-  { value: "estate_planning", label: "Estate Planning", icon: FileText },
-];
-
-function getMatterConfig(type: string | null) {
-  return MATTER_TYPES.find((m) => m.value === type) ?? null;
-}
-
-function formatMatterType(type: string | null): string {
-  return getMatterConfig(type)?.label ?? type?.replace(/_/g, " ") ?? "—";
-}
 
 // ---------------------------------------------------------------------------
 // Page
@@ -176,7 +231,6 @@ function DealsPageInner() {
     const originalProject = projects.find((p) => p.id === movedItem.id);
     if (!originalProject || originalProject.stage === movedItem.column) return;
 
-    // Persist stage change
     updateProject.mutate({
       projectId: movedItem.id,
       stage: movedItem.column as any,
@@ -289,7 +343,9 @@ function DealsPageInner() {
                       setFilterDropdownOpen(false);
                     }}
                     className={`flex w-full items-center px-3 py-2 text-sm hover:bg-gray-50 transition-colors ${
-                      !matterFilter ? "font-medium text-gray-900" : "text-gray-600"
+                      !matterFilter
+                        ? "font-medium text-gray-900"
+                        : "text-gray-600"
                     }`}
                   >
                     All Types
@@ -371,10 +427,29 @@ function DealsPageInner() {
               onSelectProject={setSelectedProject}
             />
           ) : (
-            <ListView
-              projects={projects}
-              onSelectProject={setSelectedProject}
-            />
+            /* ── LIST VIEW: shared DataTable ── */
+            <div className="overflow-y-auto p-4">
+              <div className="max-w-6xl mx-auto">
+                <DataTable
+                  columns={listColumns}
+                  data={projects}
+                  isLoading={false}
+                  searchPlaceholder="Search deals..."
+                  searchFilterFn={(row, _id, filterValue: string) => {
+                    const q = filterValue.toLowerCase();
+                    return (
+                      row.original.name.toLowerCase().includes(q) ||
+                      (row.original.clientName?.toLowerCase().includes(q) ??
+                        false)
+                    );
+                  }}
+                  onRowClick={(project) => setSelectedProject(project)}
+                  defaultSorting={[{ id: "createdAt", desc: true }]}
+                  emptyTitle="No matching deals"
+                  emptyDescription="Try adjusting your filters or create a new deal."
+                />
+              </div>
+            </div>
           )}
         </div>
       </main>
@@ -401,7 +476,7 @@ function DealsPageInner() {
 }
 
 // ---------------------------------------------------------------------------
-// Kanban View
+// Kanban View (unchanged)
 // ---------------------------------------------------------------------------
 
 function KanbanView({
@@ -450,12 +525,9 @@ function KanbanView({
                     className="cursor-pointer"
                     onClick={() => onSelectProject(item.project)}
                   >
-                    {/* Title */}
                     <p className="text-sm font-medium text-gray-800 leading-tight mb-1.5">
                       {item.project.name}
                     </p>
-
-                    {/* Client */}
                     {item.project.clientName && (
                       <div className="flex items-center gap-1.5 mb-2">
                         <User className="h-3 w-3 text-gray-400" />
@@ -464,8 +536,6 @@ function KanbanView({
                         </span>
                       </div>
                     )}
-
-                    {/* Matter type badge + meta */}
                     <div className="flex items-center gap-1.5 flex-wrap">
                       {item.project.matterType && (
                         <MatterBadge type={item.project.matterType} />
@@ -484,46 +554,6 @@ function KanbanView({
           </KanbanBoard>
         )}
       </KanbanProvider>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// List View
-// ---------------------------------------------------------------------------
-
-function ListView({
-  projects,
-  onSelectProject,
-}: {
-  projects: Project[];
-  onSelectProject: (project: Project) => void;
-}) {
-  return (
-    <div className="overflow-y-auto p-4">
-      <div className="max-w-4xl mx-auto space-y-2">
-        {projects.map((project) => (
-          <button
-            key={project.id}
-            onClick={() => onSelectProject(project)}
-            className="w-full text-left bg-white rounded-xl border border-gray-200 px-5 py-4 hover:border-gray-300 hover:shadow-sm transition-all flex items-center gap-4"
-          >
-            <div className="flex-1 min-w-0">
-              <p className="font-medium text-gray-800 truncate">
-                {project.name}
-              </p>
-              <p className="text-sm text-gray-500 mt-0.5">
-                {project.clientName ?? "No client"} ·{" "}
-                {formatMatterType(project.matterType)}
-              </p>
-            </div>
-            {project.matterType && (
-              <MatterBadge type={project.matterType} />
-            )}
-            <StageBadge stage={project.stage} />
-          </button>
-        ))}
-      </div>
     </div>
   );
 }
@@ -571,13 +601,11 @@ function ProjectDetailModal({
 
   return (
     <>
-      {/* Backdrop */}
       <div
         className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm"
         onClick={onClose}
       />
 
-      {/* Modal */}
       <div className="fixed inset-4 md:inset-y-8 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 md:w-full md:max-w-3xl z-50 flex flex-col bg-white rounded-2xl shadow-2xl overflow-hidden">
         {/* Header */}
         <div className="flex items-center gap-4 px-6 py-4 border-b border-gray-100">
@@ -590,7 +618,7 @@ function ProjectDetailModal({
               {formatMatterType(project.matterType)}
             </p>
           </div>
-          <StageBadge stage={project.stage} />
+          <StageBadgeFull stage={project.stage} />
           <button
             onClick={onClose}
             className="text-gray-400 hover:text-gray-600 transition-colors"
@@ -628,6 +656,18 @@ function ProjectDetailModal({
               })}
             />
           </div>
+
+          {/* Description */}
+          {project.description && (
+            <div className="mb-6">
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                Description
+              </h3>
+              <p className="text-sm text-gray-700 leading-relaxed bg-gray-50 rounded-lg px-4 py-3">
+                {project.description}
+              </p>
+            </div>
+          )}
 
           {/* No client nudge */}
           {!project.clientId && (
@@ -682,9 +722,7 @@ function ProjectDetailModal({
               {STAGE_COLUMNS.map((col) => (
                 <button
                   key={col.id}
-                  onClick={() =>
-                    onUpdate(project.id, { stage: col.id })
-                  }
+                  onClick={() => onUpdate(project.id, { stage: col.id })}
                   className={`rounded-full px-3 py-1 text-xs font-medium border transition-colors ${
                     project.stage === col.id
                       ? "bg-gray-900 text-white border-gray-900"
@@ -697,7 +735,17 @@ function ProjectDetailModal({
             </div>
           </div>
 
-          {/* Counts */}
+           {/* Notes */}
+          <NotesSection
+            projectId={project.id}
+            initialNotes={project.notes}
+            onSave={(notes) => onUpdate(project.id, { notes })}
+          />
+
+          {/* Activity Timeline */}
+          <ActivityTimeline projectId={project.id} dealIntakeId={project.dealIntakeId} />
+
+          {/* Activity counts */}
           <div>
             <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
               Activity
@@ -744,74 +792,70 @@ function ProjectDetailModal({
     </>
   );
 }
-
 // ---------------------------------------------------------------------------
-// Matter Type Badge
+// Notes Section (auto-save on blur)
 // ---------------------------------------------------------------------------
 
-function MatterBadge({ type }: { type: string }) {
-  const colors: Record<string, string> = {
-    real_estate: "bg-emerald-50 text-emerald-700 border-emerald-200",
-    criminal: "bg-red-50 text-red-700 border-red-200",
-    business: "bg-blue-50 text-blue-700 border-blue-200",
-    municipal: "bg-purple-50 text-purple-700 border-purple-200",
-    landlord_tenant: "bg-amber-50 text-amber-700 border-amber-200",
-    estate_planning: "bg-indigo-50 text-indigo-700 border-indigo-200",
-  };
+function NotesSection({
+  projectId,
+  initialNotes,
+  onSave,
+}: {
+  projectId: string;
+  initialNotes: string | null;
+  onSave: (notes: string) => void;
+}) {
+  const [localNotes, setLocalNotes] = useState(initialNotes ?? "");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const lastSaved = useRef(initialNotes ?? "");
+
+  // Sync if the project changes (modal reopened for different project)
+  useEffect(() => {
+    setLocalNotes(initialNotes ?? "");
+    lastSaved.current = initialNotes ?? "";
+  }, [projectId, initialNotes]);
+
+  function handleBlur() {
+    if (localNotes === lastSaved.current) return;
+    setSaving(true);
+    onSave(localNotes);
+    lastSaved.current = localNotes;
+    setTimeout(() => {
+      setSaving(false);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1500);
+    }, 300);
+  }
 
   return (
-    <span
-      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${
-        colors[type] ?? "bg-gray-50 text-gray-600 border-gray-200"
-      }`}
-    >
-      {formatMatterType(type)}
-    </span>
+    <div className="mb-6">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+          Notes
+        </h3>
+        {saving && (
+          <span className="text-[10px] text-gray-400 flex items-center gap-1">
+            <Loader2 className="h-3 w-3 animate-spin" /> Saving…
+          </span>
+        )}
+        {saved && (
+          <span className="text-[10px] text-green-600 flex items-center gap-1">
+            <Check className="h-3 w-3" /> Saved
+          </span>
+        )}
+      </div>
+      <textarea
+        value={localNotes}
+        onChange={(e) => setLocalNotes(e.target.value)}
+        onBlur={handleBlur}
+        placeholder="Add meeting notes, observations, follow-ups…"
+        rows={4}
+        className="w-full rounded-lg border border-gray-200 bg-white px-4 py-3 text-sm text-gray-700 placeholder-gray-400 outline-none focus:border-gray-400 transition-colors resize-y"
+      />
+    </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Stage Badge
-// ---------------------------------------------------------------------------
-
-function StageBadge({ stage }: { stage: string }) {
-  const colors: Record<string, string> = {
-    prospecting: "bg-slate-50 text-slate-600 border-slate-200",
-    intake: "bg-yellow-50 text-yellow-700 border-yellow-200",
-    active: "bg-blue-50 text-blue-700 border-blue-200",
-    under_review: "bg-indigo-50 text-indigo-700 border-indigo-200",
-    pending_client: "bg-amber-50 text-amber-700 border-amber-200",
-    complete: "bg-green-50 text-green-700 border-green-200",
-    archived: "bg-gray-50 text-gray-500 border-gray-200",
-  };
-
-  const Icons: Record<string, typeof Clock> = {
-    prospecting: Briefcase,
-    intake: Clock,
-    active: Loader2,
-    under_review: FileText,
-    pending_client: User,
-    complete: CheckCircle2,
-    archived: CheckCircle2,
-  };
-
-  const Icon = Icons[stage] ?? Clock;
-  const label =
-    STAGE_COLUMNS.find((c) => c.id === stage)?.name ??
-    stage.replace(/_/g, " ");
-
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${
-        colors[stage] ?? "bg-gray-50 text-gray-600 border-gray-200"
-      }`}
-    >
-      <Icon className="h-3 w-3" />
-      {label}
-    </span>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Info Card
 // ---------------------------------------------------------------------------
@@ -821,7 +865,7 @@ function InfoCard({
   label,
   value,
 }: {
-  icon: typeof Home;
+  icon: typeof Briefcase;
   label: string;
   value: string;
 }) {
